@@ -7,6 +7,16 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
+// ShortDigest abbreviates a "sha256:<hex>" digest the same way the controller
+// does when rendering event notes ("sha256:" plus 12 hex characters).
+func ShortDigest(digest string) string {
+	const shortLen = len("sha256:") + 12
+	if len(digest) > shortLen {
+		return digest[:shortLen]
+	}
+	return digest
+}
+
 // FilterEventsByObject returns events regarding the identified object.
 func FilterEventsByObject(
 	items []eventsv1.Event,
