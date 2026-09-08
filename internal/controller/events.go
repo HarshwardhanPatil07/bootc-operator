@@ -3,6 +3,7 @@
 package controller
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -11,6 +12,8 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	bootcv1alpha1 "github.com/bootc-dev/bootc-operator/api/v1alpha1"
 )
@@ -23,6 +26,7 @@ const (
 	eventActionResolveImage = "ResolveImage"
 	eventActionRollout      = "Rollout"
 	eventActionPoolDegraded = "PoolDegraded"
+	eventActionNodeUpdate   = "NodeUpdate"
 
 	eventNoteLimit  = 1024
 	eventNoteSuffix = "..."
@@ -89,6 +93,38 @@ type poolDegradedNote struct {
 
 func (n poolDegradedNote) Note() string {
 	return capNote(n.Message)
+}
+
+type nodeStagingNote struct {
+	Image string
+}
+
+func (n nodeStagingNote) Note() string {
+	return fmt.Sprintf("Staging image %s", n.Image)
+}
+
+type nodeStagedNote struct {
+	Image string
+}
+
+func (n nodeStagedNote) Note() string {
+	return fmt.Sprintf("Image %s is staged and awaiting reboot", n.Image)
+}
+
+type nodeRebootingNote struct {
+	Image string
+}
+
+func (n nodeRebootingNote) Note() string {
+	return fmt.Sprintf("Rebooting into image %s", n.Image)
+}
+
+type nodeIdleNote struct {
+	Image string
+}
+
+func (n nodeIdleNote) Note() string {
+	return fmt.Sprintf("Node is up to date with image %s", n.Image)
 }
 
 func (r *BootcNodePoolReconciler) recordPoolEvents(
@@ -183,6 +219,104 @@ func degradedConditionChanged(previous, current *metav1.Condition) bool {
 		previous.Status != metav1.ConditionTrue ||
 		previous.Reason != current.Reason ||
 		previous.Message != current.Message
+}
+
+// recordNodeEvents emits an event once for each observed Staging, Staged,
+// Rebooting, or return-to-idle transition. A controller-owned annotation
+// persists the last observation so unrelated reconciles and controller restarts
+// do not repeat events. Annotation write failures are logged but never block a
+// rollout.
+func (r *BootcNodePoolReconciler) recordNodeEvents(
+	ctx context.Context,
+	pool *bootcv1alpha1.BootcNodePool,
+	nodes map[string]*bootcv1alpha1.BootcNode,
+) {
+	log := logf.FromContext(ctx)
+	for _, node := range nodes {
+		previous := node.Annotations[bootcv1alpha1.AnnotationLastObservedState]
+		observation, reason, note := nodeEvent(node, previous)
+		if observation == "" || previous == observation {
+			continue
+		}
+
+		if note != nil {
+			r.recordEvent(
+				node,
+				pool,
+				corev1.EventTypeNormal,
+				reason,
+				eventActionNodeUpdate,
+				note,
+			)
+		}
+
+		modified := node.DeepCopy()
+		if modified.Annotations == nil {
+			modified.Annotations = map[string]string{}
+		}
+		modified.Annotations[bootcv1alpha1.AnnotationLastObservedState] = observation
+		if err := r.Patch(ctx, modified, client.MergeFrom(node)); err != nil {
+			// Emit first so a transient marker write failure cannot permanently
+			// hide the transition. A retry may aggregate the same event into an
+			// EventSeries, which is preferable to losing it.
+			log.Error(err, "Failed to persist last observed node state", "node", node.Name)
+			continue
+		}
+		*node = *modified
+	}
+}
+
+// nodeEvent maps a BootcNode's Idle condition to the event that should be
+// recorded for it. It returns the observation to persist, the event reason, and
+// the note to emit. A nil note means the transition should be tracked (so it is
+// not re-evaluated) but no event is emitted. previousObservation is the last
+// persisted observation and is used to emit a return-to-idle event only when the
+// node was previously mid-rollout.
+func nodeEvent(
+	node *bootcv1alpha1.BootcNode,
+	previousObservation string,
+) (observation, reason string, note EventNote) {
+	idle := apimeta.FindStatusCondition(node.Status.Conditions, bootcv1alpha1.NodeIdle)
+	if idle == nil {
+		return "", "", nil
+	}
+
+	observation = fmt.Sprintf("%s:%s:%s", idle.Status, idle.Reason, node.Spec.DesiredImage)
+	if idle.Status != metav1.ConditionFalse {
+		// The node is idle. Only announce it when it just finished a rollout;
+		// otherwise (freshly created or already idle) record the observation
+		// silently so restarts do not emit a spurious event.
+		if idle.Reason == bootcv1alpha1.NodeReasonIdle && isActiveObservation(previousObservation) {
+			return observation,
+				bootcv1alpha1.NodeReasonIdle,
+				nodeIdleNote{Image: node.Spec.DesiredImage}
+		}
+		return observation, "", nil
+	}
+
+	switch idle.Reason {
+	case bootcv1alpha1.NodeReasonStaging:
+		return observation,
+			bootcv1alpha1.NodeReasonStaging,
+			nodeStagingNote{Image: node.Spec.DesiredImage}
+	case bootcv1alpha1.NodeReasonStaged:
+		return observation,
+			bootcv1alpha1.NodeReasonStaged,
+			nodeStagedNote{Image: node.Spec.DesiredImage}
+	case bootcv1alpha1.NodeReasonRebooting:
+		return observation,
+			bootcv1alpha1.NodeReasonRebooting,
+			nodeRebootingNote{Image: node.Spec.DesiredImage}
+	default:
+		return observation, "", nil
+	}
+}
+
+// isActiveObservation reports whether a persisted observation represents a node
+// that was mid-rollout (Idle=False). Observations are formatted as
+// "<status>:<reason>:<image>".
+func isActiveObservation(observation string) bool {
+	return strings.HasPrefix(observation, string(metav1.ConditionFalse)+":")
 }
 
 func (r *BootcNodePoolReconciler) recordEvent(
