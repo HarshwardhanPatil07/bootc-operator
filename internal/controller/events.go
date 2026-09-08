@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
@@ -22,14 +23,18 @@ const (
 	eventReasonImageUpdateAvailable = "ImageUpdateAvailable"
 	eventReasonRolloutStarted       = "RolloutStarted"
 	eventReasonRolloutCompleted     = "RolloutCompleted"
+	eventReasonDrainFailed          = "DrainFailed"
+	eventReasonDrainTakingTooLong   = "DrainTakingTooLong"
 
 	eventActionResolveImage = "ResolveImage"
 	eventActionRollout      = "Rollout"
 	eventActionPoolDegraded = "PoolDegraded"
 	eventActionNodeUpdate   = "NodeUpdate"
+	eventActionDrain        = "Drain"
 
-	eventNoteLimit  = 1024
-	eventNoteSuffix = "..."
+	drainStallThreshold = 5 * time.Minute
+	eventNoteLimit      = 1024
+	eventNoteSuffix     = "..."
 )
 
 // EventNote renders the human-readable message of a Kubernetes Event. Each
@@ -125,6 +130,27 @@ type nodeIdleNote struct {
 
 func (n nodeIdleNote) Note() string {
 	return fmt.Sprintf("Node is up to date with image %s", n.Image)
+}
+
+// drainFailedNote embeds an error string, which is not length-bounded, so it
+// caps itself.
+type drainFailedNote struct {
+	Err error
+}
+
+func (n drainFailedNote) Note() string {
+	return capNote(fmt.Sprintf("Failed to drain node: %v; the drain will be retried", n.Err))
+}
+
+type drainStalledNote struct {
+	Threshold time.Duration
+}
+
+func (n drainStalledNote) Note() string {
+	return fmt.Sprintf(
+		"Drain has been running for more than %s; it may be blocked by a PodDisruptionBudget",
+		n.Threshold,
+	)
 }
 
 func (r *BootcNodePoolReconciler) recordPoolEvents(
@@ -317,6 +343,76 @@ func nodeEvent(
 // "<status>:<reason>:<image>".
 func isActiveObservation(observation string) bool {
 	return strings.HasPrefix(observation, string(metav1.ConditionFalse)+":")
+}
+
+func (r *BootcNodePoolReconciler) recordDrainFailedEvent(
+	pool *bootcv1alpha1.BootcNodePool,
+	node *bootcv1alpha1.BootcNode,
+	err error,
+) {
+	r.recordEvent(
+		node,
+		pool,
+		corev1.EventTypeWarning,
+		eventReasonDrainFailed,
+		eventActionDrain,
+		drainFailedNote{Err: err},
+	)
+}
+
+// recordDrainStalls emits one warning per drain that crosses the stall
+// threshold and returns when the next active drain should be checked. The
+// existing in-memory drain state is sufficient because drains are restarted
+// after a controller restart.
+func (r *BootcNodePoolReconciler) recordDrainStalls(
+	pool *bootcv1alpha1.BootcNodePool,
+	nodes map[string]*bootcv1alpha1.BootcNode,
+) time.Duration {
+	now := time.Now()
+	var stalledNodes []*bootcv1alpha1.BootcNode
+	var nextCheck time.Duration
+
+	r.drainsMu.Lock()
+	for nodeName, status := range r.drains {
+		if status.isStalled {
+			continue
+		}
+
+		remaining := drainStallThreshold - now.Sub(status.startTime)
+		if remaining > 0 {
+			nextCheck = earlierRequeue(nextCheck, remaining)
+			continue
+		}
+
+		status.isStalled = true
+		if node, ok := nodes[nodeName]; ok {
+			stalledNodes = append(stalledNodes, node)
+		}
+	}
+	r.drainsMu.Unlock()
+
+	for _, node := range stalledNodes {
+		r.recordEvent(
+			node,
+			pool,
+			corev1.EventTypeWarning,
+			eventReasonDrainTakingTooLong,
+			eventActionDrain,
+			drainStalledNote{Threshold: drainStallThreshold},
+		)
+	}
+
+	return nextCheck
+}
+
+func earlierRequeue(current, candidate time.Duration) time.Duration {
+	if candidate <= 0 {
+		return current
+	}
+	if current <= 0 || candidate < current {
+		return candidate
+	}
+	return current
 }
 
 func (r *BootcNodePoolReconciler) recordEvent(

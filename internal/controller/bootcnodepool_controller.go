@@ -43,7 +43,7 @@ type drainStatus struct {
 	ctx       context.Context    // the drain goroutine's context; checked to distinguish cancellation from real errors
 	cancel    context.CancelFunc // to abort on targetDigest change or node removal
 	startTime time.Time          // for stall detection
-	isStalled bool               //nolint:unused // used by drain stall detection
+	isStalled bool               // set after the one-shot drain stall event is emitted
 }
 
 // TagResolver resolves a container image reference to a digest.
@@ -317,6 +317,11 @@ func (r *BootcNodePoolReconciler) Reconcile(
 		}
 		return ctrl.Result{}, fmt.Errorf("driving rollout: %w", err)
 	}
+	resolveResult.RequeueAfter = earlierRequeue(
+		resolveResult.RequeueAfter,
+		r.recordDrainStalls(&pool, ownedBootcNodes),
+	)
+
 	// Early-return paths above (TargetDigest empty, InvalidSpec) skip
 	// aggregation. In-flight updates may complete during error conditions
 	// but counts catch up on the next successful reconcile.
