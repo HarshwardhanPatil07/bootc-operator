@@ -4,6 +4,8 @@ package controller
 
 import (
 	"fmt"
+	"strings"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -20,6 +22,10 @@ const (
 
 	eventActionResolveImage = "ResolveImage"
 	eventActionRollout      = "Rollout"
+	eventActionPoolDegraded = "PoolDegraded"
+
+	eventNoteLimit  = 1024
+	eventNoteSuffix = "..."
 )
 
 // EventNote renders the human-readable message of a Kubernetes Event. Each
@@ -73,6 +79,16 @@ type poolRolloutCompletedNote struct {
 
 func (n poolRolloutCompletedNote) Note() string {
 	return fmt.Sprintf("Rollout completed at digest %s", shortDigest(n.TargetDigest))
+}
+
+// poolDegradedNote wraps a pool's Degraded condition message, which is not
+// length-bounded, so it caps itself.
+type poolDegradedNote struct {
+	Message string
+}
+
+func (n poolDegradedNote) Note() string {
+	return capNote(n.Message)
 }
 
 func (r *BootcNodePoolReconciler) recordPoolEvents(
@@ -133,6 +149,19 @@ func (r *BootcNodePoolReconciler) recordPoolEvents(
 			poolRolloutCompletedNote{TargetDigest: pool.Status.TargetDigest},
 		)
 	}
+
+	oldDegraded := apimeta.FindStatusCondition(previous.Conditions, bootcv1alpha1.PoolDegraded)
+	newDegraded := apimeta.FindStatusCondition(pool.Status.Conditions, bootcv1alpha1.PoolDegraded)
+	if degradedConditionChanged(oldDegraded, newDegraded) {
+		r.recordEvent(
+			pool,
+			nil,
+			corev1.EventTypeWarning,
+			newDegraded.Reason,
+			eventActionPoolDegraded,
+			poolDegradedNote{Message: newDegraded.Message},
+		)
+	}
 }
 
 func conditionEnteredReason(
@@ -146,10 +175,37 @@ func conditionEnteredReason(
 	return previous == nil || previous.Status != status || previous.Reason != reason
 }
 
+func degradedConditionChanged(previous, current *metav1.Condition) bool {
+	if current == nil || current.Status != metav1.ConditionTrue {
+		return false
+	}
+	return previous == nil ||
+		previous.Status != metav1.ConditionTrue ||
+		previous.Reason != current.Reason ||
+		previous.Message != current.Message
+}
+
 func (r *BootcNodePoolReconciler) recordEvent(
 	regarding, related runtime.Object,
 	eventType, reason, action string,
 	note EventNote,
 ) {
 	r.Recorder.Eventf(regarding, related, eventType, reason, action, "%s", note.Note())
+}
+
+// capNote keeps a note within the events.k8s.io/v1 1 KiB limit and never splits
+// a UTF-8 sequence. It is only needed for notes built from unbounded free text
+// (condition messages, error strings); notes assembled from bounded fields fit
+// by construction.
+func capNote(note string) string {
+	note = strings.ToValidUTF8(note, "�")
+	if len(note) <= eventNoteLimit {
+		return note
+	}
+
+	limit := eventNoteLimit - len(eventNoteSuffix)
+	for limit > 0 && !utf8.RuneStart(note[limit]) {
+		limit--
+	}
+	return note[:limit] + eventNoteSuffix
 }
