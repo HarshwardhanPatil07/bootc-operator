@@ -307,6 +307,7 @@ func (r *BootcNodePoolReconciler) Reconcile(
 	// From this point on, let's not re-Get/List() BootcNodes anymore and
 	// just use `ownedBootcNodes` so that we have a consistent view for this
 	// reconciliation run.
+	r.recordNodeEvents(ctx, &pool, ownedBootcNodes)
 
 	// Drive the rollout state machine.
 	rs, err := r.driveRollout(ctx, &pool, ownedBootcNodes)
