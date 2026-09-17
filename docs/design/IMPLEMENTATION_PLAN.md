@@ -271,7 +271,7 @@ verifies the tag resolves and the initial rollout completes. Then push
 a new version to the same tag, verify `updateAvailable` surfaces, and
 the updated image rolls out to the node.
 
-### 5b. Pull secret propagation
+### 5b. Pull secret propagation ✅
 
 - Watch Secrets referenced by pools (`EnqueueRequestsFromMapFunc`)
 - Controller copies `pullSecretRef` + content hash to `BootcNode.spec`
