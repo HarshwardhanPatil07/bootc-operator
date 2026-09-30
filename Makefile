@@ -103,6 +103,8 @@ e2e: ## Run e2e tests (requires: make deploy-bink). V=1 for verbose. RUN=<regex>
 # actually gives us streaming output (otherwise, it spawns a subprocess for
 # each package, even though we just have one here--but I really like streaming
 # output...).
+# Budget the full suite for serial node provisioning, reboots, and
+# configuration restart coverage.
 	rm -rf $(ARTIFACTS)
 	cd test/e2e && KUBECONFIG=$(abspath $(KUBECONFIG_BINK)) \
 		E2E_PROVIDER=bink \
@@ -116,7 +118,7 @@ e2e: ## Run e2e tests (requires: make deploy-bink). V=1 for verbose. RUN=<regex>
 		E2E_REGISTRY_USER=$(E2E_REGISTRY_USER) E2E_REGISTRY_PASSWORD=$(E2E_REGISTRY_PASSWORD) \
 		$(if $(RELEASED_OPERATOR_TAG),E2E_OPERATOR_RELEASE_TAG=$(RELEASED_OPERATOR_TAG)) \
 		$(if $(RELEASED_OPERATOR_IMG),E2E_OPERATOR_RELEASED_IMG=$(IMG_BINK_RELEASED)) \
-		go test -timeout 40m -count=1 $(if $(V),-v) $(if $(RUN),-run $(RUN)) .
+		go test -timeout 50m -count=1 $(if $(V),-v) $(if $(RUN),-run $(RUN)) .
 
 # EKS e2e settings
 EKS_CLUSTER_NAME ?=
