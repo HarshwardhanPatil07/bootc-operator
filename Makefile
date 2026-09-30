@@ -240,14 +240,13 @@ start-bink: seed-node-image ## Start a bink cluster (idempotent).
 .PHONY: deploy-bink
 deploy-bink: start-bink build-update-image $(if $(RELEASED_OPERATOR_IMG),push-released-operator-image) kustomize ## Deploy to a bink cluster (requires: buildimg).
 	podman push --tls-verify=false $(IMG) localhost:5000/bootc-operator-e2e:latest
-	# On re-deploy, restart the rollout to force a re-pull of the :latest tag.
-	# On fresh deploy, skip the restart -- the pod is already pulling the correct image.
-	@existed=$$(kubectl --kubeconfig $(KUBECONFIG_BINK) -n bootc-operator get deploy bootc-operator-controller-manager -o name 2>/dev/null || true) && \
-	$(MAKE) deploy KUBECONFIG=$(abspath $(KUBECONFIG_BINK)) IMG=$(IMG_BINK) \
-		MANAGER_EXTRA_ARGS='"--allow-insecure-registry","--tag-resolution-interval=10s"' && \
-	if [ -n "$$existed" ]; then \
-		kubectl --kubeconfig $(KUBECONFIG_BINK) -n bootc-operator rollout restart deployment/bootc-operator-controller-manager; \
-	fi
+	$(MAKE) deploy KUBECONFIG=$(abspath $(KUBECONFIG_BINK)) IMG=$(IMG_BINK)
+	kubectl --kubeconfig $(KUBECONFIG_BINK) wait --for=condition=Established \
+		crd/bootcoperatorconfigs.node.bootc.dev --timeout=1m
+	kubectl --kubeconfig $(KUBECONFIG_BINK) apply -f config/bink/operator-config.yaml
+	# Restart even on fresh deploy: pods may start before the configuration exists.
+	# On re-deploy this also forces a re-pull of the :latest image.
+	kubectl --kubeconfig $(KUBECONFIG_BINK) -n bootc-operator rollout restart deployment/bootc-operator-controller-manager
 	kubectl --kubeconfig $(KUBECONFIG_BINK) -n bootc-operator rollout status deployment/bootc-operator-controller-manager --timeout=3m
 
 .PHONY: gather-bink
