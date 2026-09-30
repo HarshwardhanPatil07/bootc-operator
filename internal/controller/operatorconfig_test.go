@@ -13,8 +13,10 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
 	bootcv1alpha1 "github.com/bootc-dev/bootc-operator/api/v1alpha1"
+	operatorconfig "github.com/bootc-dev/bootc-operator/internal/config"
 )
 
 func TestBootcOperatorConfigDefaults(t *testing.T) {
@@ -108,6 +110,9 @@ func TestBootcOperatorConfigValidation(t *testing.T) {
 func TestBootcOperatorConfigRoundTrip(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
+	loaded, err := operatorconfig.Load(ctx, testEnv.Config, k8sClient.Scheme())
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(loaded).To(BeNil(), "an absent instance permits startup defaults")
 	config := &bootcv1alpha1.BootcOperatorConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: bootcv1alpha1.BootcOperatorConfigName},
 		Spec: bootcv1alpha1.BootcOperatorConfigSpec{
@@ -125,18 +130,44 @@ func TestBootcOperatorConfigRoundTrip(t *testing.T) {
 	t.Cleanup(func() {
 		g.Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, config))).To(Succeed())
 	})
-	var got bootcv1alpha1.BootcOperatorConfig
-	g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(config), &got)).To(Succeed())
+	got, err := operatorconfig.Load(ctx, testEnv.Config, k8sClient.Scheme())
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(got).NotTo(BeNil())
 	g.Expect(got.Spec).To(Equal(wantSpec))
 
-	got.Spec.Controller.AllowInsecureRegistry = ptr.To(false)
-	got.Spec.Daemon.StatusPollPeriodSeconds = ptr.To(int32(23))
-	wantSpec = *got.Spec.DeepCopy()
-	g.Expect(k8sClient.Update(ctx, &got)).To(Succeed())
-	g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(config), &got)).To(Succeed())
+	startup := got
+	updated := got.DeepCopy()
+	updated.Spec.Controller.AllowInsecureRegistry = ptr.To(false)
+	updated.Spec.Daemon.StatusPollPeriodSeconds = ptr.To(int32(23))
+	wantSpec = *updated.Spec.DeepCopy()
+	g.Expect(k8sClient.Update(ctx, updated)).To(Succeed())
+	got, err = operatorconfig.Load(ctx, testEnv.Config, k8sClient.Scheme())
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(got).NotTo(BeNil())
 	g.Expect(got.Spec).To(Equal(wantSpec))
 	g.Expect(got.UID).To(Equal(config.UID))
 	g.Expect(got.Generation).To(Equal(config.Generation + 1))
+	g.Expect(startup.Spec).
+		To(Equal(config.Spec), "previously loaded configuration remains a snapshot")
+
+	g.Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+	loaded, err = operatorconfig.Load(ctx, testEnv.Config, k8sClient.Scheme())
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(loaded).To(BeNil(), "deleting the instance restores defaults on the next load")
+}
+
+func TestBootcOperatorConfigMissingCRD(t *testing.T) {
+	g := NewWithT(t)
+	// A separate API server keeps the missing-CRD case isolated from the suite.
+	env := &envtest.Environment{}
+	restConfig, err := env.Start()
+	g.Expect(err).NotTo(HaveOccurred())
+	t.Cleanup(func() { g.Expect(env.Stop()).To(Succeed()) })
+
+	loaded, err := operatorconfig.Load(context.Background(), restConfig, k8sClient.Scheme())
+	g.Expect(err).To(MatchError(apierrors.IsNotFound, "IsNotFound"))
+	g.Expect(err.Error()).To(ContainSubstring("ensure the bootcoperatorconfigs CRD is installed"))
+	g.Expect(loaded).To(BeNil())
 }
 
 // Use unstructured objects to exercise missing, null, and invalid fields that
