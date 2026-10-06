@@ -256,7 +256,9 @@ start-bink: seed-node-image ## Start a bink cluster (idempotent).
 	kubectl --kubeconfig $(KUBECONFIG_BINK) wait --for=condition=Ready node/controller --timeout=5m
 
 .PHONY: deploy-bink
-deploy-bink: start-bink build-update-image $(if $(RELEASED_OPERATOR_IMG),push-released-operator-image) helm ## Deploy to a bink cluster (requires: buildimg).
+deploy-bink: start-bink helm ## Deploy to a bink cluster (requires: buildimg).
+	$(MAKE) build-update-image
+	$(if $(RELEASED_OPERATOR_IMG),$(MAKE) push-released-operator-image)
 	podman push --tls-verify=false $(IMG) localhost:5000/bootc-operator-e2e:latest
 	helm dependency build ./chart/bootc-operator
 	img="$(IMG_BINK)" && \
@@ -265,10 +267,10 @@ deploy-bink: start-bink build-update-image $(if $(RELEASED_OPERATOR_IMG),push-re
 		--create-namespace --namespace bootc-operator \
 		--set-string image.repository="$${img%:*}" \
 		--set-string image.tag="$${img##*:}" \
-		--set-string image.pullPolicy=Always \
-		--set-json 'controller.extraArgs=["--allow-insecure-registry","--tag-resolution-interval=10s"]'
-	kubectl --kubeconfig $(KUBECONFIG_BINK) -n bootc-operator rollout restart deployment/bootc-operator-controller
-	kubectl --kubeconfig $(KUBECONFIG_BINK) -n bootc-operator rollout status deployment/bootc-operator-controller --timeout=3m
+		--set-string image.pullPolicy=Always
+	KUBECONFIG="$(abspath $(KUBECONFIG_BINK))" \
+		KUBECTL="$(KUBECTL)" ./hack/deploy-bink.sh
+
 
 .PHONY: gather-bink
 gather-bink: ## Gather diagnostic logs from the bink cluster.
