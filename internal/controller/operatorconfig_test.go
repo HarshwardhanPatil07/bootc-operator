@@ -5,6 +5,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"testing"
 
 	. "github.com/onsi/gomega"
@@ -14,6 +15,7 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	sigsyaml "sigs.k8s.io/yaml"
 
 	bootcv1alpha1 "github.com/bootc-dev/bootc-operator/api/v1alpha1"
 	operatorconfig "github.com/bootc-dev/bootc-operator/internal/config"
@@ -62,6 +64,29 @@ func TestBootcOperatorConfigDefaults(t *testing.T) {
 			}))
 		})
 	}
+}
+
+func TestBootcOperatorConfigReleaseExample(t *testing.T) {
+	g := NewWithT(t)
+	data, err := os.ReadFile("../../config/samples/bootc_v1alpha1_bootcoperatorconfig.yaml")
+	g.Expect(err).NotTo(HaveOccurred())
+
+	var example bootcv1alpha1.BootcOperatorConfig
+	g.Expect(sigsyaml.UnmarshalStrict(data, &example)).To(Succeed())
+	g.Expect(example.APIVersion).To(Equal(bootcv1alpha1.GroupVersion.String()))
+	g.Expect(example.Kind).To(Equal("BootcOperatorConfig"))
+	g.Expect(example.Name).To(Equal("cluster"))
+	g.Expect(example.Spec).To(Equal(bootcv1alpha1.BootcOperatorConfigSpec{
+		Controller: &bootcv1alpha1.OperatorControllerConfig{
+			AllowInsecureRegistry:      ptr.To(false),
+			TagResolutionPeriodSeconds: ptr.To(bootcv1alpha1.DefaultTagResolutionPeriodSeconds),
+		},
+		Daemon: &bootcv1alpha1.OperatorDaemonConfig{
+			StatusPollPeriodSeconds: ptr.To(bootcv1alpha1.DefaultStatusPollPeriodSeconds),
+		},
+	}))
+	g.Expect(k8sClient.Create(context.Background(), &example,
+		client.DryRunAll, client.FieldValidation(metav1.FieldValidationStrict))).To(Succeed())
 }
 
 func TestBootcOperatorConfigValidation(t *testing.T) {
