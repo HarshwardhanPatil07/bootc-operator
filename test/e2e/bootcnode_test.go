@@ -424,7 +424,9 @@ func TestMidRolloutImageChange(t *testing.T) {
 	t.Logf("Switched pool to second update image %s", updateRef2)
 
 	// Phase 6: Wait for both nodes to be Idle with the second update image.
-	for _, nodeName := range []string{nodeA, nodeB} {
+	// Reboots are serialized: wait for the node already rebooting first so
+	// the other node's timeout does not include waiting for its reboot slot.
+	for _, nodeName := range []string{rebootingNode, otherNode} {
 		testutil.WaitForNodeIdle(t, g, ctx, env.Client, nodeName, 8*time.Minute,
 			HaveField("Booted", HaveField("ImageDigest", Equal(env.NodeImageUpdate2Digest()))),
 		)
