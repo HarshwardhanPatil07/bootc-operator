@@ -77,6 +77,7 @@ func TestControllerMembership(t *testing.T) {
 		var pods corev1.PodList
 		err := env.Client.List(ctx, &pods,
 			client.InNamespace(testutil.OperatorNamespaceName),
+			client.MatchingFields{"spec.nodeName": nodeName},
 			client.MatchingLabels{
 				"app.kubernetes.io/name":      "bootc-operator",
 				"app.kubernetes.io/component": "daemon",
