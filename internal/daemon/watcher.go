@@ -20,6 +20,9 @@ import (
 )
 
 const (
+	// DefaultPollInterval is the fallback interval for reading host bootc status.
+	DefaultPollInterval = 5 * time.Minute
+
 	DefaultOstreePath    = "/proc/1/root/ostree/bootc"
 	DefaultComposefsPath = "/proc/1/root/sysroot/state/deploy"
 )
@@ -88,7 +91,7 @@ func (w *StatusWatcher) Start(ctx context.Context) error {
 	defer closeFsWatcher()
 
 	if w.PollInterval <= 0 {
-		w.PollInterval = 5 * time.Minute
+		w.PollInterval = DefaultPollInterval
 	}
 
 	// Only start polling once fsnotify is unavailable.

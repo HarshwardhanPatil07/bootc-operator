@@ -39,7 +39,7 @@ func main() {
 	flag.DurationVar(
 		&pollInterval,
 		"bootc-poll-interval",
-		5*time.Minute,
+		daemon.DefaultPollInterval,
 		"Interval for polling bootc status as a fallback to fsnotify",
 	)
 
