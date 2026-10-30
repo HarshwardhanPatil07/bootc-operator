@@ -248,10 +248,12 @@ new image and the daemon reports `Idle=True`.
 - Polling fallback every ~5 minutes
 - On event: re-read bootc status, update BootcNode.status if changed
 
-**Validation (e2e):** add a test that triggers an external bootc status
-change on the host (e.g. via SSH) and verifies the daemon detects it
-and updates BootcNode.status within a bounded time window (shorter than
-the polling interval, proving fsnotify is working).
+**Validation (e2e):** ✅ On bink, `TestExternalBootcStatusChange` runs
+`bootc switch` on the host and verifies the daemon publishes the staged
+image within 30 seconds of the command completing. It requires a new
+status update before the first possible fallback poll, using the same
+default interval as the daemon. It verifies that the BootcNode generation
+stayed unchanged and the daemon pod was neither replaced nor restarted.
 
 ## Milestone 5: Tag Resolution & Pull Secrets
 
