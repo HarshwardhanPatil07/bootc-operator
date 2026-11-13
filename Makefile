@@ -283,8 +283,9 @@ YQ ?= $(LOCALBIN)/yq
 
 KUSTOMIZE_VERSION ?= v5.8.1
 CONTROLLER_TOOLS_VERSION ?= v0.20.1
-GOLANGCI_LINT_VERSION ?= v2.11.4
+GOLANGCI_LINT_VERSION ?= v2.13.2
 YQ_VERSION ?= v4.53.2
+GOLINES_VERSION ?= v0.16.0
 
 # ENVTEST_VERSION is the version of controller-runtime release branch to fetch the envtest setup script (i.e. release-0.20)
 ENVTEST_VERSION ?= $(shell v='$(call gomodver,sigs.k8s.io/controller-runtime)'; \
@@ -326,7 +327,7 @@ $(GOLANGCI_LINT): $(LOCALBIN)
 .PHONY: get-golines
 get-golines: $(GOLINES_BIN) ## Download golines locally if necessary.
 $(GOLINES_BIN): $(LOCALBIN)
-	$(call go-install-tool,$(GOLINES_BIN),github.com/golangci/golines,latest)
+	$(call go-install-tool,$(GOLINES_BIN),github.com/golangci/golines,$(GOLINES_VERSION))
 
 .PHONY: yq
 yq: $(YQ) ## Download yq locally if necessary.
